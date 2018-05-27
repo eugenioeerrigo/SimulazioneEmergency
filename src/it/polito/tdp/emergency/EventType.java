@@ -2,7 +2,7 @@ package it.polito.tdp.emergency;
 
 public enum EventType {
 	ARRIVA, // arriva nuovo paziente all'ingresso
-	TRIAGE, // al paziente viene assegnato un codice
+	TRIAGE, // al paziente viene assegnato un codice (5 min dopo l'arrivo)
 	CHIAMATA, // il paziente entra dal medico
 	USCITA, // il paziente esce dallo studio medico
 	

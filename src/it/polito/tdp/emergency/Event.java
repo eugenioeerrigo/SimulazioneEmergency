@@ -6,7 +6,7 @@ public class Event implements Comparable<Event>{
 	private LocalTime ora ;
 	private EventType tipo ;
 	
-	private Paziente paziente ;
+	private Paziente paziente ;  //Associo anche riferimento al paziente
 
 	public Event(LocalTime ora, EventType tipo, Paziente paziente) {
 		super();
