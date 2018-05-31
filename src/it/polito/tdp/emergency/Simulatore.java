@@ -22,10 +22,13 @@ public class Simulatore {
 	private int TIMEOUT_WHITE = 120;
 	private int TIMEOUT_YELLOW = 60;
 	private int TIMEOUT_RED = 90;
+	private int T_POLLING = 5;
 	
 	//Modello del mondo
-	 List<Paziente> pazienti;
-	 StatoPaziente statoTriage;           //prossimo stato nel triage
+	 private List<Paziente> pazienti;
+	 private StatoPaziente statoTriage;           //prossimo stato nel triage
+	 private int studiOccupati;
+	 private PriorityQueue<Paziente> attesa;      //sottinsieme di pazienti che è in triage e non è ancora entrato in studio (gestisce priorità)
 	
 	//Valori in output
 	 private int pazientiCurati;
@@ -33,19 +36,23 @@ public class Simulatore {
 	 private int pazientiMorti;
 	
 	//Coda degli eventi
-	PriorityQueue<Event> queue = new PriorityQueue<>();
+	private PriorityQueue<Event> queue = new PriorityQueue<>();
 	
 	
 	public void init() {
 		this.pazienti = new ArrayList<>();
+		this.attesa = new PriorityQueue<>(new PazienteComparator());
 		LocalTime ora = T_inizio;
 		
 		for(int i=0; i<NP; i++) {
 			Paziente p = new Paziente(i+1, StatoPaziente.NEW, ora);
 			Event e = new Event(ora, EventType.ARRIVA, p);
 			ora = ora.plusMinutes(T_ARRIVAL);
+			queue.add(e);
 		}
+		queue.add(new Event(T_inizio, EventType.POLLING, null));
 		
+		this.studiOccupati = 0;
 		statoTriage = StatoPaziente.WHITE;
 		
 		pazientiCurati =0;
@@ -69,9 +76,11 @@ public class Simulatore {
 			Event corr = new Event(e.getOra().plusMinutes(DURATION_TRIAGE), EventType.TRIAGE, e.getPaziente());
 			queue.add(corr);    //ricordo di implementare compareTo in Event
 			break;
+			
 		case TRIAGE:
 			//assegno lo stato a rotazione
 			e.getPaziente().setStato(statoTriage);
+			
 			if(statoTriage==StatoPaziente.WHITE) {
 				queue.add(new Event(e.getOra().plusMinutes(TIMEOUT_WHITE), EventType.TIMEOUT_WHITE, e.getPaziente()) );
 			}else if(statoTriage==StatoPaziente.YELLOW) {
@@ -79,6 +88,7 @@ public class Simulatore {
 			}else if(statoTriage==StatoPaziente.RED){
 				queue.add(new Event(e.getOra().plusMinutes(TIMEOUT_RED), EventType.TIMEOUT_RED, e.getPaziente()) );
 			}
+			attesa.add(e.getPaziente());
 			
 			//cambiaStatoTriage();             //ROTAZIONE ROUND-ROBIN
 			if(statoTriage==StatoPaziente.WHITE)
@@ -89,23 +99,138 @@ public class Simulatore {
 				statoTriage = StatoPaziente.WHITE;
 			
 			break;
+			
 		case CHIAMATA:
+	
+			studiOccupati++;     
+			
+			//Dopo essere entrato, schedulo l'uscita
+			switch(e.getPaziente().getStato()) {
+			case WHITE:
+				queue.add(new Event(e.getOra().plusMinutes(DURATION_WHITE), EventType.USCITA, e.getPaziente()));
+				break;
+	
+			case YELLOW:
+				queue.add(new Event(e.getOra().plusMinutes(DURATION_YELLOW), EventType.USCITA, e.getPaziente()));
+				break;
+				
+			case RED:
+				queue.add(new Event(e.getOra().plusMinutes(DURATION_RED), EventType.USCITA, e.getPaziente()));
+				break;
+			}
+			
+			e.getPaziente().setStato(StatoPaziente.TREATING);     //In fase di cura
 			break;
 		
 		case USCITA:
 			//Registrare uscita e.getPaziente()
+			e.getPaziente().setStato(StatoPaziente.OUT);
+			pazientiCurati++;
+			studiOccupati--;
 			
-			//Decidere chi devo chiamare tra i pazienti in attesa
+			//Decidere chi devo chiamare tra i pazienti in attesa -> Implemento coda di Pazienti ordinati per priorità
+			//Dopo aver creato la lista, è il primo ad essere chiamato
+			Paziente paz = attesa.poll();   //Paziente da chiamare (peek() è come get(), con poll() lo chiamo e lo rimuovo)
+			if(paz!=null) {
+				queue.add(new Event(e.getOra(), EventType.CHIAMATA, paz));  //Schedulo per NOW la chiamata del paziente 
+			}
 			
-			//Schedulare per ADESSO la chiamata del paziente
 			break;
 		case TIMEOUT_WHITE:
+			if(e.getPaziente().getStato()==StatoPaziente.WHITE) {
+				attesa.remove(e.getPaziente());
+				pazientiAbbandonati++;
+				e.getPaziente().setStato(StatoPaziente.OUT);
+			}
 			break;
 		case TIMEOUT_YELLOW:
+			if(e.getPaziente().getStato()==StatoPaziente.YELLOW) {
+				attesa.remove(e.getPaziente());
+				e.getPaziente().setStato(StatoPaziente.RED);
+				queue.add(new Event(e.getOra().plusMinutes(TIMEOUT_RED), EventType.TIMEOUT_RED, e.getPaziente()) );
+				attesa.add(e.getPaziente());  //reinserisco in posizione più privilegiata
+			}
 			break;
 		case TIMEOUT_RED:
+			if(e.getPaziente().getStato()==StatoPaziente.RED) {
+				attesa.remove(e.getPaziente());
+				pazientiMorti++;
+				e.getPaziente().setStato(StatoPaziente.DEAD);
+			}
+			break;
+		case POLLING:
+			if(studiOccupati<NS && !attesa.isEmpty()) {  //se studio libero e ho qualcuno in attesa
+				Paziente paz2 = attesa.poll();
+				queue.add(new Event(e.getOra(), EventType.CHIAMATA, paz2));
+			}
+				queue.add(new Event(e.getOra().plusMinutes(T_POLLING), EventType.POLLING, null));
 			break;
 		}	
+	}
+
+	//Getter su risultati / Setter su parametri da impostare
+	public int getPazientiCurati() {
+		return pazientiCurati;
+	}
+
+	public int getPazientiAbbandonati() {
+		return pazientiAbbandonati;
+	}
+
+	public int getPazientiMorti() {
+		return pazientiMorti;
+	}
+
+	public void setNS(int nS) {
+		NS = nS;
+	}
+
+	public void setNP(int nP) {
+		NP = nP;
+	}
+
+	public void setT_ARRIVAL(int t_ARRIVAL) {
+		T_ARRIVAL = t_ARRIVAL;
+	}
+
+	public void setT_inizio(LocalTime t_inizio) {
+		T_inizio = t_inizio;
+	}
+
+	public void setT_fine(LocalTime t_fine) {
+		T_fine = t_fine;
+	}
+
+	public void setDURATION_TRIAGE(int dURATION_TRIAGE) {
+		DURATION_TRIAGE = dURATION_TRIAGE;
+	}
+
+	public void setDURATION_WHITE(int dURATION_WHITE) {
+		DURATION_WHITE = dURATION_WHITE;
+	}
+
+	public void setDURATION_YELLOW(int dURATION_YELLOW) {
+		DURATION_YELLOW = dURATION_YELLOW;
+	}
+
+	public void setDURATION_RED(int dURATION_RED) {
+		DURATION_RED = dURATION_RED;
+	}
+
+	public void setTIMEOUT_WHITE(int tIMEOUT_WHITE) {
+		TIMEOUT_WHITE = tIMEOUT_WHITE;
+	}
+
+	public void setTIMEOUT_YELLOW(int tIMEOUT_YELLOW) {
+		TIMEOUT_YELLOW = tIMEOUT_YELLOW;
+	}
+
+	public void setTIMEOUT_RED(int tIMEOUT_RED) {
+		TIMEOUT_RED = tIMEOUT_RED;
+	}
+
+	public void setT_POLLING(int t_POLLING) {
+		T_POLLING = t_POLLING;
 	}
 	
 	
